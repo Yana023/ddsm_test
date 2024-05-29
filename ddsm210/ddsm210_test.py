@@ -20,6 +20,7 @@ Note:
 
   Baud: 115200 8N1
   Rate: 500Hz
+  OpenLoopMode: 解放状態。breakコマンドでも保持しない。
   VelocityMode: -2100~2100(-210rpm~210rpm) [signed 16bit]
   PositionMode: 0-32767(0~360deg) [unsigned 16bit]
 
@@ -37,14 +38,14 @@ Note:
 """
 
 
-SERIAL_PORT = 'COM8'  # Change as per your COM port
+SERIAL_PORT = 'COM3'  # Change as per your COM port
 BAUD_RATE = 115200
 ID = 0x01  # default
 
 CMD_SETID = [0x55, 0x53]
 CMD_DRIVE = [0x64, ]
 CMD_FEEDBACK = [0x74, ]
-CMD_QUERY = [0x75, ]
+CMD_OBTAIN = [0x75, ]
 CMD_MODE_SWITCH = [0xA0,]
 
 ID_SETID = 0xAA  # ID設定時に指定するID
@@ -201,11 +202,13 @@ def send_command(ser: Serial, id: int, cmd: List[int], data: List[int] = None):
     ret = ser.read(10)
     print("Response:", ' '.join(f"{x:02X}" for x in ret))
 
-    if cmd == CMD_DRIVE:
+    if ret == b'':
+        print("No response")
+    elif cmd == CMD_DRIVE:
         parse_rotate_motor_result(ret)
     elif cmd == CMD_FEEDBACK:
         parse_mileage_motor_result(ret)
-    elif cmd == CMD_QUERY:
+    elif cmd == CMD_OBTAIN:
         parse_mode_motor_result(ret)
 
     print()
@@ -236,76 +239,145 @@ def rotate_motor(ser, id, velocity=0, acceleration_ms=0, break_mode=False):
     return send_command(ser, id, CMD_DRIVE, data)
 
 
+def change_id(ser: Serial, new_id: int) -> bool:
+    """ID変更
+
+    モーターの電源投入後に1度しか変更を受け付けない。
+    2回目以降はレスポンスがNULLとなる。
+    5回IDを送信することで変更が適用される。
+
+    :param Serial ser: シリアルポート
+    :param int new_id: 新しいID
+
+    :return: 成功したかどうか
+    """
+
+    for i in range(5):
+        print(f"Set ID to {new_id:02X}, step {i + 1}")
+        ret = send_command(ser, ID_SETID, CMD_SETID + [new_id,])
+        if ret[9] != crc8(bytearray(ret[:9])):
+            print("CRC8 error")
+            return False
+
+    print("ID changed to", new_id)
+    return True
+
+
+def test1_velocity_mode(ser):
+    # velocity loop mode
+    print("# Switching to velocity loop")
+    send_command(ser, ID, CMD_MODE_SWITCH + [MODE_VELOCITY,])
+    time.sleep(1)
+
+    print("# Querying motor mode")
+    send_command(ser, ID, CMD_OBTAIN)
+    time.sleep(1)
+
+    print("# rotating motor at 0 rpm")
+    rotate_motor(ser, ID, 0)
+    time.sleep(3)
+
+    print("# Rotating motor at -100 rpm")
+    rotate_motor(ser, ID, -1000)
+    time.sleep(3)
+
+    print("# Rotating motor at 100 rpm")
+    rotate_motor(ser, ID, 1000)
+    time.sleep(3)
+
+    print("# Rotating motor at -2100 rpm")
+    rotate_motor(ser, ID, -2100)
+    time.sleep(3)
+
+    print("# Rotating motor at 2100 rpm")
+    rotate_motor(ser, ID, 2100)
+    time.sleep(3)
+
+    print("# Rotating motor acceleration at -2100 rpm, 25.5ms")
+    rotate_motor(ser, ID, 2100, 10.0)  # 10ms**10e-3 * 2100rpm = 21s
+    time.sleep(25)
+
+    print("# Break command")
+    rotate_motor(ser, ID, break_mode=True)
+
+
+def test2_position_mode(ser):
+    # position loop mode
+    print("# Switching to position loop")
+    send_command(ser, ID, CMD_MODE_SWITCH + [MODE_POSITION,])
+
+    print("# Rotating motor at 0 deg")
+    rotate_motor(ser, ID, 0)
+    time.sleep(5)
+
+    print("# Rotating motor at 90 deg")
+    rotate_motor(ser, ID, int(32767 / 4))
+    time.sleep(5)
+
+    print("# Rotating motor at 180 deg")
+    rotate_motor(ser, ID, int(32767 / 2))
+    time.sleep(5)
+
+    print("# Rotating motor at 360 deg")
+    rotate_motor(ser, ID, 32767)
+    time.sleep(5)
+
+    print("# Break command")
+    rotate_motor(ser, ID, break_mode=True)
+
+
+def test3_openloop_mode(ser):
+    print("# Switching to open loop")
+    send_command(ser, ID, CMD_MODE_SWITCH + [MODE_OPENLOOP,])
+
+
+def test4_change_id(ser):
+    # change id
+    new_id = 0x02
+    change_id(ser, new_id)
+
+    # feedback test
+    print("# Feedback")
+    send_command(ser, new_id, CMD_FEEDBACK)
+
+
+def test5_reset_id(ser):
+    # reset
+    change_id(ser, ID)
+
+    # feedback test
+    print("# Feedback")
+    send_command(ser, ID, CMD_FEEDBACK)
+
+
+def test6_feedback(ser):
+    # feedback test
+    print("# Feedback")
+    send_command(ser, ID, CMD_FEEDBACK)
+
+
+def test7_obtain_mode(ser):
+    # obtain mode feedback
+    print("# Obtain mode feedback")
+    send_command(ser, ID, CMD_OBTAIN)
+
+
 def test():
     ser = Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
 
     try:
-        print("# Break command (reset)")
-        rotate_motor(ser, ID, break_mode=True)
+        test1_velocity_mode(ser)
+        test2_position_mode(ser)
+        test3_openloop_mode(ser)
 
-        # velocity loop mode
-        print("# Switching to velocity loop")
-        send_command(ser, ID, CMD_MODE_SWITCH + [MODE_VELOCITY,])
-        time.sleep(1)
+        # ID変更テストは一度電源を入れ直してから実行してください。
+        # test4_change_id(ser)
 
-        print("# Querying motor mode")
-        send_command(ser, ID, CMD_QUERY)
-        time.sleep(1)
+        # IDを0x01に戻したいときに使います。一度電源を入れ直してから実行してください。
+        # test5_reset_id(ser)
 
-        print("# rotating motor at 0 rpm")
-        rotate_motor(ser, ID, 0)
-        time.sleep(3)
-
-        print("# Rotating motor at -100 rpm")
-        rotate_motor(ser, ID, -1000)
-        time.sleep(3)
-
-        print("# Rotating motor at 100 rpm")
-        rotate_motor(ser, ID, 1000)
-        time.sleep(3)
-
-        print("# Rotating motor at -2100 rpm")
-        rotate_motor(ser, ID, -2100)
-        time.sleep(3)
-
-        print("# Rotating motor at 2100 rpm")
-        rotate_motor(ser, ID, 2100)
-        time.sleep(3)
-
-        print("# Rotating motor acceleration at -2100 rpm, 25.5ms")
-        rotate_motor(ser, ID, 2100, 10.0)  # 10ms**10e-3 * 2100rpm = 21s
-        time.sleep(25)
-
-        print("# Break command")
-        rotate_motor(ser, ID, break_mode=True)
-
-        # position loop mode
-        print("# Switching to position loop")
-        send_command(ser, ID, CMD_MODE_SWITCH + [MODE_POSITION,])
-
-        print("# Rotating motor at 0 deg")
-        rotate_motor(ser, ID, 0)
-        time.sleep(5)
-
-        print("# Rotating motor at 90 deg")
-        rotate_motor(ser, ID, int(32767 / 4))
-        time.sleep(5)
-
-        print("# Rotating motor at 180 deg")
-        rotate_motor(ser, ID, int(32767 / 2))
-        time.sleep(5)
-
-        print("# Rotating motor at 360 deg")
-        rotate_motor(ser, ID, 32767)
-        time.sleep(5)
-
-        # feedback test
-        print("# Feedback test")
-        send_command(ser, ID, CMD_FEEDBACK)
-
-        # obtain mode feedback
-        print("# Querying motor mode")
-        send_command(ser, ID, CMD_QUERY)
+        test6_feedback(ser)
+        test7_obtain_mode(ser)
 
         # last stop
         print("# Break command")
