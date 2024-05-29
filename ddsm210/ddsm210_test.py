@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import time
+from typing import List
 from serial import Serial
 from crcmod.predefined import mkCrcFun
-from typing import List
 
 """
 DDSM210のテスト用スクリプト
@@ -26,7 +26,8 @@ Note:
 
   電源が落ちたときはIDのみ保持していてブレーキ状態になる。
 
-  data[1] 0x64時のモーター制御モード
+  data[0]: ID
+  data[1]: 0x64=モーター制御モード
   data[2]: speed/position high
   data[3]: speed/position low
   data[4]: 0
@@ -369,6 +370,8 @@ def test():
         test1_velocity_mode(ser)
         test2_position_mode(ser)
         test3_openloop_mode(ser)
+
+        # ID変更はデバイスを1台だけ接続してテストしてください。
 
         # ID変更テストは一度電源を入れ直してから実行してください。
         # test4_change_id(ser)
